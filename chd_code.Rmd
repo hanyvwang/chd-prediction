@@ -1,0 +1,623 @@
+---
+title: "Using Multiple Factors to Predict the Presence of Heart Disease"
+author: "Hanyu Wang"
+output: pdf_document
+---
+
+# Install Data & Packages
+```{r, inclued=FALSE}
+hd_initial=read.csv("/Users/macbook/Downloads/heart.csv")
+```
+
+```{r, include=FALSE}
+# install.packages("tibble")
+# install.packages("caret")
+# install.packages("rms")
+# install.packages("glmnet")
+library(tibble)
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(rms)
+library(glmnet)
+```
+
+
+
+# Data Cleaning
+```{r}
+hd <- hd_initial
+
+hd <- hd %>%
+  filter(RestingBP != 0, Cholesterol != 0)
+
+hd <- hd %>%
+  mutate(Sex = case_when(
+    Sex == "F" ~ 0,
+    Sex == "M" ~ 1),
+    ChestPainType = case_when(
+      ChestPainType == "TA" ~ 1,
+      ChestPainType == "ATA" ~ 2,
+      ChestPainType == "NAP" ~ 3,
+      ChestPainType == "ASY" ~ 4),
+    RestingECG = case_when(
+      RestingECG == "Normal" ~ 1,
+      RestingECG == "ST" ~ 2,
+      RestingECG == "LVH" ~ 3),
+    ExerciseAngina = case_when(
+      ExerciseAngina == "N" ~ 0,
+      ExerciseAngina == "Y" ~ 1),
+    ST_Slope = case_when(
+      ST_Slope == "Down" ~ 1,
+      ST_Slope == "Flat" ~ 2,
+      ST_Slope == "Up" ~ 3)
+    )
+```
+
+
+
+# Data Informations
+
+## Description
+```{r}
+Variable <- c("Age (Numerical)", "Sex (Nominal)", "ChestPainType (Nominal)", "RestingBP (Numerical)", "FastingBS (Nominal)", "MaxHR (Numerical)", "Oldpeak (Numerical)", "ST_Slope (Nominal)", "Cholestrol (Numerical)", "RestingECG (Nominal)", "ExerciseAngina (Nominal)", "HeartDisease (Nominal)")
+
+Description <- c("The age of the person (in year)",
+                 "The sex of the person (0: F; 1: M)",
+                 "The type of chest pain the person has (1: TA; 2: ATA; 3:NAP; 4: ASY)",
+                 "The level of blood presure when the person is resting (in mm/HG)",
+                 "Whether the Blood sugear level on fasting of the person achieve 120 mg/dl (0: N; 1: Y)",
+                 "The maximum heart rate of the person",
+                 "The ST-depression when exercising compare to when resting",
+                 "The slope of the ST segment when exercising (0: Normal; 1: Upsloping; 2: Flat; 3: Downsloping)",
+                 "The Serum cholestrol of the person (in mg/dl)",
+                 "The result of electrocardiogram when the person is resting (0: Normal; 1: ST; 2: LVH)",
+                 "Whether the person has angina when exercising (0: N; 1: Y)",
+                 "Whether the person have the heart disease (0: False; 1: True)")
+
+Type <- c("Predictor of Interest", "Predictor of Interest", "Predictor of Interest", "Predictor of Interest", "Predictor of Interest", "Predictor of Interest", "Predictor of Interest", "Predictor of Interest", "Confounding Variabl", "Confounding Variabl", "Confounding Variable", "Response Variable")
+
+info <- tibble(Variable, Description, Type)
+table <- knitr::kable(info)
+table
+```
+
+## Summary
+
+```{r}
+hd_initial <- hd_initial %>%
+  filter(RestingBP != 0, Cholesterol != 0)
+
+summary(hd_initial[c(1, 4, 5, 8, 10)])
+
+table(hd_initial$Sex)
+table(hd_initial$ChestPainType)
+table(hd_initial$FastingBS)
+table(hd_initial$RestingECG)
+table(hd_initial$ExerciseAngina)
+table(hd_initial$ST_Slope)
+table(hd_initial$HeartDisease)
+```
+
+
+## Distributions
+
+### Age
+```{r}
+temp_hd <- hd %>%
+  mutate(HeartDisease = factor(HeartDisease, levels = c(0, 1), labels = c("No", "Yes")))
+
+ggplot(temp_hd, aes(x = as.factor(Age), fill = HeartDisease)) + 
+  geom_bar(position = "dodge") +
+  scale_fill_manual(values = c("No" = "springgreen3", "Yes" = "brown1")) +
+  scale_y_continuous(breaks = seq(0, max(table(temp_hd$Age, temp_hd$HeartDisease)), by = 1)) + 
+  labs(title = "Distribution of Age and Heart Disease",
+       x = "Age",
+       y = "Count",
+       fill = "Heart Disease") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))
+```
+
+### Sex
+```{r}
+sex_counts <- hd_initial %>%
+  count(Sex) %>%
+  mutate(Percentage = n / sum(n) * 100)
+
+heart_disease_counts <- hd_initial %>%
+  filter(HeartDisease == 1) %>%
+  count(Sex)
+
+total_counts <- hd_initial %>%
+  count(Sex)
+
+heart_disease_prop <- heart_disease_counts %>%
+  inner_join(total_counts, by = "Sex") %>%
+  mutate(prop = n.x / n.y)
+
+ggplot() +
+  geom_bar(data = sex_counts, aes(x = factor(Sex), y = n, fill = "No Heart Disease"), stat = "identity", color = "white") +
+  geom_text(data = sex_counts, aes(x = factor(Sex), label = n, y = n), vjust = -0.1, size = 4) +
+  geom_bar(data = heart_disease_prop, aes(x = factor(Sex), y = prop * n.y, fill = "Heart Disease"), stat = "identity", color = "white", alpha = 0.5) +
+  geom_text(data = heart_disease_prop, aes(x = factor(Sex), label = paste0(round(prop * 100, 1), "%"), y = prop * n.y), vjust = -0.1, size = 4) +
+  scale_fill_manual(values = c("red3", "pink"), name = "Heart Disease", labels = c("Yes", "No")) +
+  labs(x = "Sex", y = "Number", fill = "Heart Disease", title = "Distribution of Sex and Heart Disease") +
+  theme_minimal()
+```
+
+### ChestPainType
+```{r}
+chest_pain_counts <- hd_initial %>%
+  count(ChestPainType) %>%
+  mutate(Percentage = n / sum(n) * 100)
+
+heart_disease_counts <- hd_initial %>%
+  filter(HeartDisease == 1) %>%
+  count(ChestPainType)
+
+total_counts <- hd_initial %>%
+  count(ChestPainType)
+
+heart_disease_prop <- heart_disease_counts %>%
+  inner_join(total_counts, by = "ChestPainType") %>%
+  mutate(prop = n.x / n.y)
+
+ggplot() +
+  geom_bar(data = chest_pain_counts, aes(x = factor(ChestPainType), y = n, fill = "No Heart Disease"), stat = "identity", color = "white") +
+  geom_text(data = chest_pain_counts, aes(x = factor(ChestPainType), label = n, y = n), vjust = -0.1, size = 4) +
+  geom_bar(data = heart_disease_prop, aes(x = factor(ChestPainType), y = prop * n.y, fill = "Heart Disease"), stat = "identity", color = "white", alpha = 0.5) +
+  geom_text(data = heart_disease_prop, aes(x = factor(ChestPainType), label = paste0(round(prop * 100, 1), "%"), y = prop * n.y), vjust = -0.1, size = 4) +
+  scale_fill_manual(values = c("red3", "pink"), name = "Heart Disease", labels = c("Yes", "No")) +
+  labs(x = "Chest Pain Type", y = "Number", fill = "Heart Disease", title = "Distribution of Chest Pain Type and Heart Disease") +
+  theme_minimal()
+```
+
+### Resting BP
+```{r}
+hd$RestingBPGroup <- cut(hd$RestingBP,
+                           breaks = c(0, 120, 140, 160, 180, Inf),
+                           labels = c("<=120", "121-140", "141-160", "161-180", ">180"),
+                           include.lowest = TRUE)
+
+bp_counts <- hd %>%
+  group_by(RestingBPGroup) %>%
+  summarise(Total = n(),
+            HeartDiseaseCount = sum(HeartDisease == 1),
+            Percentage = HeartDiseaseCount / Total * 100)
+
+ggplot(bp_counts, aes(x = RestingBPGroup)) +
+  geom_bar(aes(y = Total, fill = "Total"), stat = "identity", color = "white", alpha = 0.5) +
+  geom_bar(aes(y = HeartDiseaseCount, fill = "Heart Disease"), stat = "identity", color = "white") +
+  geom_text(aes(y = Total, label = Total), vjust = -0.5, color = "darkred") +
+  geom_text(aes(y = HeartDiseaseCount, label = paste0(round(Percentage, 1), "%")), vjust = +0.5, color = "black") +
+  scale_fill_manual(values = c("Total" = "pink", "Heart Disease" = "red3"), name = "Category") +
+  labs(title = "Distribution of Resting Blood Pressure and Heart Disease", 
+       x = "Resting Blood Pressure", y = "Number") +
+  theme_minimal()
+
+hd <- subset(hd, select = -RestingBPGroup)
+```
+
+### Cholesterol
+```{r}
+hd_initial <- hd_initial %>%
+  mutate(Cholesterol_Group = case_when(
+    Cholesterol < 200 ~ "Desirable (<200)",
+    Cholesterol >= 200 & Cholesterol <= 239 ~ "Borderline high (200-239)",
+    Cholesterol > 239 & Cholesterol <= 300 ~ "High (240-300)",
+    Cholesterol > 300 ~ "Very High (>300)"
+  ))
+
+cholesterol_counts <- hd_initial %>%
+  count(Cholesterol_Group) %>%
+  mutate(Percentage = n / sum(n) * 100)
+
+heart_disease_counts <- hd_initial %>%
+  filter(HeartDisease == 1) %>%
+  count(Cholesterol_Group)
+
+total_counts <- hd_initial %>%
+  count(Cholesterol_Group)
+
+heart_disease_prop <- heart_disease_counts %>%
+  inner_join(total_counts, by = "Cholesterol_Group") %>%
+  mutate(prop = n.x / n.y)
+
+ggplot() +
+  geom_bar(data = cholesterol_counts, aes(x = Cholesterol_Group, y = n, fill = "No Heart Disease"), stat = "identity", color = "white") +
+  geom_text(data = cholesterol_counts, aes(x = Cholesterol_Group, label = n, y = n), vjust = -0.1, size = 4) +
+  geom_bar(data = heart_disease_prop, aes(x = Cholesterol_Group, y = prop * n.y, fill = "Heart Disease"), stat = "identity", color = "white", alpha = 0.5) +
+  geom_text(data = heart_disease_prop, aes(x = Cholesterol_Group, label = paste0(round(prop * 100, 1), "%"), y = prop * n.y), vjust = -0.1, size = 4) +
+  scale_fill_manual(values = c("red3", "pink"), name = "Heart Disease", labels = c("Yes", "No")) +
+  labs(x = "Cholesterol Level", y = "Number", fill = "Heart Disease", title = "Distribution of Cholesterol Level and Heart Disease") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### FastingBS
+```{r}
+fasting_bs_counts <- hd_initial %>%
+  count(FastingBS) %>%
+  mutate(Percentage = n / sum(n) * 100)
+
+heart_disease_counts <- hd_initial %>%
+  filter(HeartDisease == 1) %>%
+  count(FastingBS)
+
+total_counts <- hd_initial %>%
+  count(FastingBS)
+
+heart_disease_prop <- heart_disease_counts %>%
+  inner_join(total_counts, by = "FastingBS") %>%
+  mutate(prop = n.x / n.y)
+
+ggplot() +
+  geom_bar(data = fasting_bs_counts, aes(x = factor(FastingBS, labels = c("No", "Yes")), y = n, fill = "No Heart Disease"), stat = "identity", color = "white") +
+  geom_text(data = fasting_bs_counts, aes(x = factor(FastingBS, labels = c("No", "Yes")), label = n, y = n), vjust = -0.1, size = 4) +
+  geom_bar(data = heart_disease_prop, aes(x = factor(FastingBS, labels = c("No", "Yes")), y = prop * n.y, fill = "Heart Disease"), stat = "identity", color = "white", alpha = 0.5) +
+  geom_text(data = heart_disease_prop, aes(x = factor(FastingBS, labels = c("No", "Yes")), label = paste0(round(prop * 100, 1), "%"), y = prop * n.y), vjust = -0.1, size = 4) +
+  scale_fill_manual(values = c("red3", "pink"), name = "Heart Disease", labels = c("Yes", "No")) +
+  labs(x = "Fasting Blood Sugar", y = "Number", fill = "Heart Disease", title = "Distribution of Fasting Blood Sugar and Heart Disease") +
+  theme_minimal()
+```
+
+### RestingECG
+```{r}
+resting_ecg_counts <- hd_initial %>%
+  count(RestingECG) %>%
+  mutate(Percentage = n / sum(n) * 100)
+
+heart_disease_counts <- hd_initial %>%
+  filter(HeartDisease == 1) %>%
+  count(RestingECG)
+
+total_counts <- hd_initial %>%
+  count(RestingECG)
+
+heart_disease_prop <- heart_disease_counts %>%
+  inner_join(total_counts, by = "RestingECG") %>%
+  mutate(prop = n.x / n.y)
+
+ggplot() +
+  geom_bar(data = resting_ecg_counts, aes(x = factor(RestingECG, labels = c("Normal", "Abnormality", "Hypertrophy")), y = n, fill = "No Heart Disease"), stat = "identity", color = "white") +
+  geom_text(data = resting_ecg_counts, aes(x = factor(RestingECG, labels = c("Normal", "Abnormality", "Hypertrophy")), label = n, y = n), vjust = -0.1, size = 4) +
+  geom_bar(data = heart_disease_prop, aes(x = factor(RestingECG, labels = c("Normal", "Abnormality", "Hypertrophy")), y = prop * n.y, fill = "Heart Disease"), stat = "identity", color = "white", alpha = 0.5) +
+  geom_text(data = heart_disease_prop, aes(x = factor(RestingECG, labels = c("Normal", "Abnormality", "Hypertrophy")), label = paste0(round(prop * 100, 1), "%"), y = prop * n.y), vjust = -0.1, size = 4) +
+  scale_fill_manual(values = c("red3", "pink"), name = "Heart Disease", labels = c("Yes", "No")) +
+  labs(x = "Electrocardiogram when Resting", y = "Number", fill = "Heart Disease", title = "Distribution by the result of Electrocardiogram when Resting") +
+  theme_minimal()
+```
+
+### MaxHR
+```{r}
+maxhr_counts <- hd %>%
+  filter(MaxHR != 0) %>%
+  mutate(MaxHR_Group = cut(MaxHR, breaks = c(0, 100, 120, 140, 160, Inf),
+                           labels = c("<100", "100-120", "121-140", "141-160", ">160"),
+                           include.lowest = TRUE)) %>%
+  group_by(MaxHR_Group) %>%
+  summarise(Total = n(),
+            HeartDiseaseCount = sum(HeartDisease == 1),
+            Percentage = HeartDiseaseCount / Total * 100)
+
+ggplot(maxhr_counts, aes(x = MaxHR_Group)) +
+  geom_bar(aes(y = Total, fill = "Total"), stat = "identity", color = "white", alpha = 0.5) +
+  geom_bar(aes(y = HeartDiseaseCount, fill = "Heart Disease"), stat = "identity", color = "white") +
+  geom_text(aes(y = Total, label = Total), vjust = 0, color = "darkred") +
+  geom_text(aes(y = HeartDiseaseCount, label = paste0(round(Percentage, 1), "%")), vjust = 0, color = "black") +
+  scale_fill_manual(values = c("Total" = "pink", "Heart Disease" = "red3"), name = "Category") +
+  labs(title = "Distribution of Max Heart Rate and Heart Disease", 
+       x = "Max Heart Rate", y = "Number") +
+  theme_minimal()
+```
+
+### ExerciseAngina
+```{r}
+exercise_angina_counts <- hd_initial %>%
+  count(ExerciseAngina) %>%
+  mutate(Percentage = n / sum(n) * 100)
+
+heart_disease_counts <- hd_initial %>%
+  filter(HeartDisease == 1) %>%
+  count(ExerciseAngina)
+
+total_counts <- hd_initial %>%
+  count(ExerciseAngina)
+
+heart_disease_prop <- heart_disease_counts %>%
+  inner_join(total_counts, by = "ExerciseAngina") %>%
+  mutate(prop = n.x / n.y)
+
+ggplot() +
+  geom_bar(data = exercise_angina_counts, aes(x = factor(ExerciseAngina, labels = c("No", "Yes")), y = n, fill = "No Heart Disease"), stat = "identity", color = "white") +
+  geom_text(data = exercise_angina_counts, aes(x = factor(ExerciseAngina, labels = c("No", "Yes")), label = n, y = n), vjust = -0.1, size = 4) +
+  geom_bar(data = heart_disease_prop, aes(x = factor(ExerciseAngina, labels = c("No", "Yes")), y = prop * n.y, fill = "Heart Disease"), stat = "identity", color = "white", alpha = 0.5) +
+  geom_text(data = heart_disease_prop, aes(x = factor(ExerciseAngina, labels = c("No", "Yes")), label = paste0(round(prop * 100, 1), "%"), y = prop * n.y), vjust = -0.1, size = 4) +
+  scale_fill_manual(values = c("red3", "pink"), name = "Heart Disease", labels = c("Yes", "No")) +
+  labs(x = "Exercise Angina", y = "Number", fill = "Heart Disease", title = "Distribution of Exercise Angina and Heart Disease") +
+  theme_minimal()
+```
+
+### Oldpeak
+```{r}
+hd$Oldpeak_Group <- cut(hd$Oldpeak, 
+                          breaks = c(-5, -0.25, 0, 2.5, 5, 7.5),
+                          labels = c("-5 to -0.25", "-0.25 to 0", "0 to 2.5", "2.5 to 5", "5 to 7.5"),
+                          include.lowest = TRUE)
+
+oldpeak_counts <- hd %>%
+  group_by(Oldpeak_Group) %>%
+  summarise(Total = n(),
+            HeartDiseaseCount = sum(HeartDisease == 1))
+
+ggplot(oldpeak_counts, aes(x = Oldpeak_Group)) +
+  geom_bar(aes(y = Total, fill = "Total"), stat = "identity", color = "white") +
+  geom_bar(aes(y = HeartDiseaseCount, fill = "Heart Disease"), stat = "identity", color = "white") +
+  geom_text(aes(y = Total, label = Total), vjust = -0.5, color = "darkred", size = 3) +
+  geom_text(aes(y = HeartDiseaseCount, label = paste0(round(HeartDiseaseCount / Total * 100, 1), "%")), vjust = +0.5, color = "black", size = 3) +
+  labs(title = "Distribution of Oldpeak and Heart Disease", 
+       x = "Oldpeak Group", y = "Number") +
+  scale_fill_manual(values = c("Total" = "pink", "Heart Disease" = "red3"), name = "Category") +
+  theme_minimal()
+
+hd <- subset(hd, select = -Oldpeak_Group)
+```
+
+### ST_Slope
+```{r}
+st_slope_counts <- hd_initial %>%
+  count(ST_Slope) %>%
+  mutate(Percentage = n / sum(n) * 100)
+
+heart_disease_counts <- hd_initial %>%
+  filter(HeartDisease == 1) %>%
+  count(ST_Slope)
+
+total_counts <- hd_initial %>%
+  count(ST_Slope)
+
+heart_disease_prop <- heart_disease_counts %>%
+  inner_join(total_counts, by = "ST_Slope") %>%
+  mutate(prop = n.x / n.y)
+
+ggplot() +
+  geom_bar(data = st_slope_counts, aes(x = factor(ST_Slope, labels = c("Upsloping", "Flat", "Downsloping")), y = n, fill = "No Heart Disease"), stat = "identity", color = "white") +
+  geom_text(data = st_slope_counts, aes(x = factor(ST_Slope, labels = c("Upsloping", "Flat", "Downsloping")), label = n, y = n), vjust = -0.3, size = 4) +
+  geom_bar(data = heart_disease_prop, aes(x = factor(ST_Slope, labels = c("Upsloping", "Flat", "Downsloping")), y = prop * n.y, fill = "Heart Disease"), stat = "identity", color = "white", alpha = 0.5) +
+  geom_text(data = heart_disease_prop, aes(x = factor(ST_Slope, labels = c("Upsloping", "Flat", "Downsloping")), label = paste0(round(prop * 100, 1), "%"), y = prop * n.y), vjust = 0, size = 4) +
+  scale_fill_manual(values = c("red3", "pink"), name = "Heart Disease", labels = c("Yes", "No")) +
+  labs(x = "ST Slope", y = "Number", fill = "Heart Disease", title = "Distribution by the Trend of the ST Slope") +
+  theme_minimal()
+```
+
+### HeartDisease
+```{r}
+heartdisease_summary <- hd %>%
+  count(HeartDisease)
+
+total <- sum(heartdisease_summary$n)
+
+heartdisease_summary <- heartdisease_summary %>%
+  mutate(percentage = n / total * 100)
+
+ggplot(heartdisease_summary, aes(x = "", y = n, fill = factor(HeartDisease))) +
+  geom_bar(stat = "identity", width = 1) +
+  geom_text(aes(label = paste0(round(percentage), "%")), 
+            position = position_stack(vjust = 0.5), color = "white", size = 4) +
+  coord_polar(theta = "y") +
+  labs(title = "Distribution of Heart Disease", fill = "Heart Disease") + 
+  scale_fill_manual(values = c("0" = "springgreen3", "1" = "brown1"), labels = c("No", "Yes")) + 
+  theme_void() 
+```
+
+
+
+# Model
+
+## Full Model
+```{r}
+FullModel <- glm(as.factor(HeartDisease) ~ ., data=hd, family="binomial")
+summary(FullModel)
+```
+
+
+## Select Predictors
+
+### Stepwise Selection Base on AIC
+
+```{r, eval=TRUE, echo = T}
+sel.var.aic <- step(FullModel, trace = 0, k = 2, direction = "both") 
+select_var_aic<-attr(terms(sel.var.aic), "term.labels")   
+select_var_aic
+```
+
+### Stepwise Selection Base on BIC
+```{r, eval=TRUE, echo = T}
+sel.var.bic <- step(FullModel, trace = 0, k = log(nrow(hd)), direction = "both") 
+select_var_bic<-attr(terms(sel.var.bic), "term.labels")   
+select_var_bic
+```
+
+### LASSO
+```{r}
+x = as.matrix(hd[,1:11])
+y = hd$HeartDisease
+fit = glmnet(x, y, family = "binomial")
+plot(fit, xvar = "dev", label = TRUE)
+cv.out = cv.glmnet(x, y, family = "binomial", type.measure = "class", alpha = 0.5)
+plot(cv.out)
+best.lambda <- cv.out$lambda.1se
+best.lambda
+co<-coef(cv.out, s = "lambda.1se")
+co
+```
+
+
+## Fit Model
+
+### Predictors selected by AIC
+```{r}
+model_aic <- glm(as.factor(HeartDisease) ~ Age + Sex + ChestPainType + RestingBP + Cholesterol + ExerciseAngina + Oldpeak + ST_Slope, data=hd, family="binomial")
+
+summary(model_aic)
+vif(model_aic)
+```
+
+### Predictors selected by BIC
+```{r}
+model_bic <- glm(as.factor(HeartDisease) ~ Age + Sex + ChestPainType + ExerciseAngina + Oldpeak + ST_Slope, data=hd, family="binomial")
+
+summary(model_bic)
+vif(model_bic)
+```
+
+### Predictors selected by LASSO
+```{r}
+model_lasso <- glm(as.factor(HeartDisease) ~ Age + MaxHR + ExerciseAngina + Oldpeak + ST_Slope, data=hd, family="binomial")
+
+summary(model_lasso)
+vif(model_lasso)
+```
+
+### Predictors selected by considering the results of stepwise selection base on AIC and BIC, and LASSO
+```{r}
+model_fitted <- glm(as.factor(HeartDisease) ~ Sex + ChestPainType + ExerciseAngina + ST_Slope, data=hd, family="binomial")
+
+summary(model_fitted)
+vif(model_fitted)
+```
+
+Use the model selected by stepwise selection base on AIC.
+
+
+
+# Check Model
+
+## Dfbetas
+
+### beta 1 (Age)
+```{r, eval=TRUE, echo = T}
+log.mod.final <- glm(as.factor(HeartDisease) ~ Age + Sex + ChestPainType + RestingBP + Cholesterol + ExerciseAngina + Oldpeak + ST_Slope, data=hd, family="binomial")
+df.final <- dfbetas(log.mod.final)
+head(df.final)
+
+par(family = 'serif')
+plot(hd$Age, df.final[,1], xlab='Age of the Person', 
+     ylab='dfbeta')
+lines(lowess(hd$Age, df.final[,1]), lwd=2, col='blue')
+abline(h=0, lty='dotted')
+abline(h=-2/sqrt(nrow(df.final)), lty='dotted')
+abline(h=2/sqrt(nrow(df.final)), lty='dotted')
+```
+
+### beta 4 (RestingBP)
+```{r, eval=TRUE, echo = T}
+par(family = 'serif')
+plot(hd$RestingBP, df.final[,4], xlab='Resting Blood Pressure', 
+     ylab='dfbeta')
+lines(lowess(hd$RestingBP, df.final[,4]), lwd=2, col='blue')
+abline(h=0, lty='dotted')
+abline(h=-2/sqrt(nrow(df.final)), lty='dotted')
+abline(h=2/sqrt(nrow(df.final)), lty='dotted')
+```
+
+### beta 5 (Cholesterol)
+```{r, eval=TRUE, echo = T}
+par(family = 'serif')
+plot(hd$Cholesterol, df.final[,5], xlab='Serum Cholestrol of the Person', 
+     ylab='dfbeta')
+lines(lowess(hd$Cholesterol, df.final[,5]), lwd=2, col='blue')
+abline(h=0, lty='dotted')
+abline(h=-2/sqrt(nrow(df.final)), lty='dotted')
+abline(h=2/sqrt(nrow(df.final)), lty='dotted')
+```
+
+### beta 7 (Oldpeak)
+```{r, eval=TRUE, echo = T}
+par(family = 'serif')
+plot(hd$Oldpeak, df.final[,7], xlab='The ST-depression When Exercising', 
+     ylab='dfbeta')
+lines(lowess(hd$Oldpeak, df.final[,7]), lwd=2, col='blue')
+abline(h=0, lty='dotted')
+abline(h=-2/sqrt(nrow(df.final)), lty='dotted')
+abline(h=2/sqrt(nrow(df.final)), lty='dotted')
+```
+
+
+## Deviance residuals
+
+### Age
+```{r, eval=TRUE, echo = T}
+res.dev <- residuals(log.mod.final, type = "deviance")
+par(family = 'serif')
+plot(hd$Age, res.dev, xlab='Age of the Person', 
+     ylab='Deviance Residuals')
+lines(lowess(hd$Age, res.dev), lwd=2, col='blue')
+abline(h=0, lty='dotted')
+```
+
+### RestingBP
+```{r, eval=TRUE, echo = T}
+res.dev <- residuals(log.mod.final, type = "deviance")
+par(family = 'serif')
+plot(hd$RestingBP, res.dev, xlab='Resting Blood Pressure', 
+     ylab='Deviance Residuals')
+lines(lowess(hd$RestingBP, res.dev), lwd=2, col='blue')
+abline(h=0, lty='dotted')
+```
+
+### Cholesterol
+```{r, eval=TRUE, echo = T}
+res.dev <- residuals(log.mod.final, type = "deviance")
+par(family = 'serif')
+plot(hd$Cholesterol, res.dev, xlab='Serum Cholestrol of the Person', 
+     ylab='Deviance Residuals')
+lines(lowess(hd$Cholesterol, res.dev), lwd=2, col='blue')
+abline(h=0, lty='dotted')
+```
+
+### Oldpeak
+```{r, eval=TRUE, echo = T}
+res.dev <- residuals(log.mod.final, type = "deviance")
+par(family = 'serif')
+plot(hd$Oldpeak, res.dev, xlab='The ST-depression When Exercising', 
+     ylab='Deviance Residuals')
+lines(lowess(hd$Oldpeak, res.dev), lwd=2, col='blue')
+abline(h=0, lty='dotted')
+```
+
+
+
+# Vlidation
+
+## Calibration Plot
+
+```{r, eval=TRUE, echo = T}
+hd$HeartDisease <- as.factor(hd$HeartDisease)
+
+## Fit the model with lrm from rms package ##
+lrm.final <- lrm(HeartDisease ~ ., data = hd[,which(colnames(hd) %in% c(select_var_aic, "HeartDisease"))], x =TRUE, y = TRUE, model= T)
+cross.calib <- calibrate(lrm.final, method="crossvalidation", B=10) # model calibration
+plot(cross.calib, las=1, xlab = "Predicted Probability")
+```
+
+
+## ROC Curve
+
+```{r, eval=TRUE, echo = T}
+library(pROC)
+p <- predict(lrm.final, type = "fitted")
+
+roc_logit <- roc(hd$HeartDisease ~ p)
+## The True Positive Rate ##
+TPR <- roc_logit$sensitivities
+## The False Positive Rate ##
+FPR <- 1 - roc_logit$specificities
+
+plot(FPR, TPR, xlim = c(0,1), ylim = c(0,1), type = 'l', lty = 1, lwd = 2,col = 'red')
+abline(a = 0, b = 1, lty = 2, col = 'blue')
+text(0.7,0.4,label = paste("AUC = ", round(auc(roc_logit),2)))
+
+auc(roc_logit)
+```
